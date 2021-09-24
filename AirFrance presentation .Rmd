@@ -1,0 +1,528 @@
+---
+title: "AirFrance SEM"
+author: "Martin Sandberg, Gustavo Trigos, M.Ecem Diren, Romchalee Aunsakulsaeree"
+date: "12/14/2020"
+output: html_document
+---
+
+```{r import, include=FALSE}
+# Required Packages
+library(readxl)
+library(car)
+library(ggplot2)
+library(viridis)
+library(hrbrthemes)
+library(plotfunctions)
+library(ggpubr)
+
+Air_France_DoubleClick <- read_excel("Air France Case Spreadsheet Supplement.xls",sheet = "DoubleClick")
+
+
+#Variables that need to change data type to factor 
+Air_France_DoubleClick$`Publisher Name` <- as.factor(Air_France_DoubleClick$`Publisher Name`)
+Air_France_DoubleClick$`Match Type` <- as.factor(Air_France_DoubleClick$`Match Type`)
+Air_France_DoubleClick$Campaign <- as.factor(Air_France_DoubleClick$Campaign)
+Air_France_DoubleClick$Category <- as.factor(Air_France_DoubleClick$Category)
+Air_France_DoubleClick$Status <- as.factor(Air_France_DoubleClick$Status)
+Air_France_DoubleClick$`Bid Strategy`  <- as.factor(Air_France_DoubleClick$'Bid Strategy')
+
+# UDF to find missing values
+missing_values <- function(col) {
+  num_missing <- sum(lengths(regmatches(col, gregexpr("N/A",col))))  
+  return(num_missing)
+} # end of missing_values function
+
+#Creating new variable: Return on Advertisement (ROA)
+Air_France_DoubleClick$`Total Cost`[Air_France_DoubleClick$`Total Cost` == 0] <- 1
+Air_France_DoubleClick$ROA <- Air_France_DoubleClick$Amount / Air_France_DoubleClick$`Total Cost`
+
+#Creating new variable: Return per transaction
+Air_France_DoubleClick$Return_per_transaction <- Air_France_DoubleClick$Amount / Air_France_DoubleClick$`Total Volume of Bookings`
+Air_France_DoubleClick$Return_per_transaction[is.nan(Air_France_DoubleClick$Return_per_transaction)] <- 0
+
+
+
+
+```
+
+
+```{r Subsetting}
+
+#Subsetting dataset by publisher (e.g., Google, Yahoo, MSN)
+
+#Google
+Google <- Air_France_DoubleClick[grepl("^Google",Air_France_DoubleClick$`Publisher Name`),]
+Google_US <- Google[grepl("US$", Google$`Publisher Name`),]
+Google_Global <- Google[!grepl("US$", Google$`Publisher Name`),]
+
+#Yahoo
+Yahoo <- Air_France_DoubleClick[grepl("^Yahoo",Air_France_DoubleClick$`Publisher Name`),]
+Yahoo_US <- Yahoo[grepl("US$", Yahoo$`Publisher Name`),]
+Yahoo_Global <- Yahoo[!grepl("US$", Yahoo$`Publisher Name`),]
+
+#MSN
+MSN <- Air_France_DoubleClick[grepl("^MSN",Air_France_DoubleClick$`Publisher Name`),]
+MSN_US <- MSN[grepl("US$", MSN$`Publisher Name`),]
+MSN_Global <- MSN[!grepl("US$", MSN$`Publisher Name`),]
+
+#Overture
+Overture <- Air_France_DoubleClick[grepl("^Overture",Air_France_DoubleClick$`Publisher Name`),]
+Overture_US <- Overture[grepl("US$", Overture$`Publisher Name`),]
+Overture_Global <- Overture[!grepl("US$", Overture$`Publisher Name`),]
+
+```
+
+
+## Overlook
+
+```{r Overlook graphs}
+library(ggplot2)
+
+##################### Performance by publisher graph #######################
+
+#creating dataframe 
+publishers_df <- as.data.frame(matrix(nrow=4, ncol=3))
+rownames(publishers_df) <- c("Overture","MSN","Google","Yahoo")
+colnames(publishers_df) <- c("ROA","click_thru_perc","conv_rate_perc")
+
+#Adding ROA
+publishers_df$ROA[1] <- sum(Overture$Amount)/sum(Overture$`Total Cost`)
+publishers_df$ROA[2] <- sum(MSN$Amount)/sum(MSN$`Total Cost`)
+publishers_df$ROA[3] <- sum(Google$Amount)/sum(Google$`Total Cost`)
+publishers_df$ROA[4] <- sum(Yahoo$Amount)/sum(Yahoo$`Total Cost`)
+
+#Adding engine click thru %
+publishers_df$click_thru_perc[1] <- sum(Overture$Clicks) / sum(Overture$Impressions) * 100
+publishers_df$click_thru_perc[2] <- sum(MSN$Clicks) / sum(MSN$Impressions) * 100
+publishers_df$click_thru_perc[3] <- sum(Google$Clicks) / sum(Google$Impressions) * 100
+publishers_df$click_thru_perc[4] <- sum(Yahoo$Clicks) / sum(Yahoo$Impressions) * 100
+
+#Adding conversion perc
+publishers_df$conv_rate_perc[1] <- sum(Overture$`Total Volume of Bookings`) / sum(Overture$Clicks) * 100
+publishers_df$conv_rate_perc[2] <- sum(MSN$`Total Volume of Bookings`) / sum(MSN$Clicks) * 100
+publishers_df$conv_rate_perc[3] <- sum(Google$`Total Volume of Bookings`) / sum(Google$Clicks) * 100
+publishers_df$conv_rate_perc[4] <- sum(Yahoo$`Total Volume of Bookings`) / sum(Yahoo$Clicks) * 100 
+
+# Creating graph
+perf_by_publisher <- ggplot(publishers_df,aes(x=click_thru_perc,y=conv_rate_perc,
+                                       color = rownames(publishers_df),size=ROA)) +
+  geom_point(alpha=0.5) +
+  labs(title = "Performance by publisher",
+       x="Click thru rate (%)", 
+       y="Conversion rate (%)",
+       color = "Publisher",
+       size = "ROA ($)") +
+  scale_x_continuous(breaks = seq(0,12.5,2.5), lim = c(0,12.5)) +
+  scale_y_continuous(breaks = seq(0,2,0.5), lim=c(0,2)) +
+  geom_hline(yintercept = mean(publishers_df$conv_rate_perc), color = "blue", linetype= "solid",alpha = 0.2) + #Adding horizontal line representing the mean 
+  geom_vline(xintercept = mean(publishers_df$click_thru_perc), color = "blue", linetype="solid", alpha = 0.2) + 
+  theme_classic()
+
+perf_by_publisher
+
+
+########################### Performance by campaign ###########################
+
+### Creating dataframe
+AF_US <- Air_France_DoubleClick[grepl("US$", Air_France_DoubleClick$`Publisher Name`),]
+Geo_tgt_campaigns <- AF_US[grepl("^Geo", AF_US$Campaign),]
+US_non_GEO_camp <- AF_US[!grepl("^Geo", AF_US$Campaign),]
+branded_camp <- subset(AF_US, Campaign == "Air France Branded")
+branded_with_dest <- subset(AF_US, Campaign == "Air France Brand & French Destinations")
+rest_of_US_campaigns <- subset(US_non_GEO_camp, Campaign != "Air France Brand & French Destinations" | Campaign != "Air France Branded")
+
+camp_graph_df <- as.data.frame(matrix(nrow=4, ncol=8))
+rownames(camp_graph_df) <- c("Branded","Branded with destination","Geo targeted","Rest of campaigns")
+colnames(camp_graph_df) <- c("Total revenue","Total cost", "Total impressions", "Total clicks","Total bookings","ROA","Click thru rate","Conv rate")
+
+#Adding total rev
+camp_graph_df$`Total revenue`[1] <- sum(branded_camp$Amount)
+camp_graph_df$`Total revenue`[2] <- sum(branded_with_dest$Amount)
+camp_graph_df$`Total revenue`[3] <- sum(Geo_tgt_campaigns$Amount)
+camp_graph_df$`Total revenue`[4] <- sum(rest_of_US_campaigns$Amount)
+
+#Adding total cost
+camp_graph_df$`Total cost`[1] <- sum(branded_camp$`Total Cost`)
+camp_graph_df$`Total cost`[2] <- sum(branded_with_dest$`Total Cost`)
+camp_graph_df$`Total cost`[3] <- sum(Geo_tgt_campaigns$`Total Cost`)
+camp_graph_df$`Total cost`[4] <- sum(rest_of_US_campaigns$`Total Cost`)
+
+#Adding total impressions
+camp_graph_df$`Total impressions`[1] <- sum(branded_camp$Impressions)
+camp_graph_df$`Total impressions`[2] <- sum(branded_with_dest$Impressions)
+camp_graph_df$`Total impressions`[3] <- sum(Geo_tgt_campaigns$Impressions)
+camp_graph_df$`Total impressions`[4] <- sum(rest_of_US_campaigns$Impressions)
+
+#Adding total clicks
+camp_graph_df$`Total clicks`[1] <- sum(branded_camp$Clicks)
+camp_graph_df$`Total clicks`[2] <- sum(branded_with_dest$Clicks)
+camp_graph_df$`Total clicks`[3] <- sum(Geo_tgt_campaigns$Clicks)
+camp_graph_df$`Total clicks`[4] <- sum(rest_of_US_campaigns$Clicks)
+
+#Adding total bookings
+camp_graph_df$`Total bookings`[1] <- sum(branded_camp$`Total Volume of Bookings`)
+camp_graph_df$`Total bookings`[2] <- sum(branded_with_dest$`Total Volume of Bookings`)
+camp_graph_df$`Total bookings`[3] <- sum(Geo_tgt_campaigns$`Total Volume of Bookings`)
+camp_graph_df$`Total bookings`[4] <- sum(rest_of_US_campaigns$`Total Volume of Bookings`)
+
+#Adding ROA, Click thru rate, Conversion percentage
+for(i in 1:4){
+  camp_graph_df$ROA[i] <- camp_graph_df$`Total revenue`[i] / camp_graph_df$`Total cost`[i]
+  camp_graph_df$`Click thru rate`[i] <- camp_graph_df$`Total clicks`[i] / camp_graph_df$`Total impressions`[i] * 100 #In percent
+  camp_graph_df$`Conv rate`[i] <- camp_graph_df$`Total bookings`[i] / camp_graph_df$`Total clicks`[i] * 100 #In percent
+}
+
+#### Creating graph
+overlook_campaigns <- ggplot(camp_graph_df,aes(x=`Click thru rate`,y=`Conv rate`,
+                                               color = rownames(camp_graph_df), size=ROA)) +
+  geom_point(alpha=0.5) + labs(title="Performance of US campaigns",
+                               x="Click thru rate (%)", 
+                               y="Conversion rate (%)",
+                               color = "Campaign",
+                               size = "ROA ($)") +
+  scale_x_continuous(breaks = seq(0,12.5,2.5), lim = c(0,12.5)) +
+  scale_y_continuous(breaks = seq(0,2,0.5), lim=c(0,2)) +
+  geom_hline(yintercept = mean(camp_graph_df$`Conv rate`), color = "blue", linetype="solid",alpha = 0.2) + #Adding horizontal line representing the mean 
+  geom_vline(xintercept = mean(camp_graph_df$`Click thru rate`), color = "blue", linetype="solid", alpha = 0.2) +
+  theme_classic()
+
+overlook_campaigns 
+
+```
+
+## Problem Statement 1: Association Between Total Revenue and Specificity of Keyword Search
+
+```{r Problem Statement 1}
+
+############################ Problem Statement 1 ##########################
+### Association Between Total Revenue and Specificity of Keyword Search ###
+###########################################################################
+
+# a) association between the total revenue and specificity of a keyword search
+# Response Variable: "amount" = total revenue from flights purchased
+# Explanatory Variable: "Match type" = categorical variable, categorizes specificity of keyword.
+#                       "Clicks" = number of clicks received in each advertisement.
+#                       "Click Charges" = cost that the publisher pays when the website link is clicked.
+#                       "Impressions" = number of times the website link was seen on a search result.
+#                       "Search Engine bid": the bid price to pay per advertisement click.
+
+# Checking Missing values for each of the explanatory variables relevant to the study
+AF_data <- Air_France_DoubleClick
+print(missing_values(AF_data$`Amount`))
+print(missing_values(AF_data$`Match Type`)) # Contains 48 missing values
+print(missing_values(AF_data$`Clicks`))
+print(missing_values(AF_data$`Click Charges`))
+print(missing_values(AF_data$`Search Engine Bid`))
+print(missing_values(AF_data$`Impressions`))
+
+# Because missing values for Match Type variable are only 48/4510 (~1% of observations)
+# We get rid of these observations that are missing this category
+AF_clean <- AF_data[-which(AF_data$`Match Type` == "N/A"),]
+
+# Selecting numerical variables only for correlation matrix
+nums <- unlist(lapply(AF_clean, is.numeric))  
+
+# Building a correlation matrix to determine linear relationship between variables
+correlation_response <- cor(AF_clean[,nums], method = c("pearson"))[,"Amount"]
+corr_threshold <- 0.10 # threshold for significance of strength of linear relationship
+
+# Checking for linear relationship between explanatory variables and response variable
+# Those with an absolute pearson correlation coefficient of 0.10 are considered for this analysis
+print(which((correlation_response > corr_threshold | correlation_response < -corr_threshold)))
+
+# Creating a scatterplot matrix for each of the variables used for the analysis
+my_cols <- c("#00AFBB", "#E7B800", "#FC4E07", "#00FF00")  
+pairs(AF_clean[,c("Amount","Match Type","Clicks","Click Charges","Search Engine Bid","Impressions")],
+      pch = 19, col = my_cols[AF_clean$`Match Type`])
+
+#####################################
+##### Multiple Regression Model #####
+#####################################
+
+# Building a multiple linear regression 
+lm.fit = lm(Amount~ `Match Type` + Clicks + `Click Charges` + `Search Engine Bid` + Impressions,data=AF_clean)
+
+# Observing coefficients and statistical tests
+summary(lm.fit) # uses "Advanced" keyword match type as baseline category in regression
+
+
+#### Assumptions Check ####
+
+## Uncorrelated Residuals
+
+# Viewing some diagnostic plots, splitting them into 4 different screens
+plot(predict(lm.fit), residuals(lm.fit))
+plot(predict(lm.fit), rstudent(lm.fit))
+plot(hatvalues (lm.fit))
+
+## Multicollinearity
+# Using the car library to measure multicollinearity across variables with variance inflation factor
+
+vif(lm.fit) # Variables here are below a VIF of 5, which is acceptable and does not show any apparent problem of multicollinearity between variables
+
+# Violin PLot for the type of specificity of keywords
+
+# Basic violin plot
+p <- ggplot(AF_clean, aes(x=`Match Type`, y=Amount)) + 
+  geom_violin(trim=FALSE)
+p + geom_boxplot(width=0.1) +scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9")) + lims(y=c(0,5000))
+
+
+
+```
+
+## Analysis
+### Multiple Linear Regression Intro:
+To understand the association between the total revenue from flights purchased and the specificity of a keyword search, we decided to create a multiple linear regression model. We used the total revenue from flights purchased as our response variable. 
+For our explanatory variables, we examined all the available variables in the given dataset and took a systematic selection approach by basing a criteria on the strength of linear relationship between the selected response variable and the explanatory variable being tested. We built a correlation matrix and selected all those variables that had an absolute correlation coefficient of 0.10 or more with the response variable. We came up with this threshold by maximizing the number of variables to include in the analysis while still having some sort of linear association.
+For the  total volume of bookings variable, we found a very high correlation with the response variable. But we decided to take it out of the analysis because it wouldn’t produce any business insight, given the total volume of bookings is factored in to calculate the response variable.
+With this, we were able to select the following five explanatory variables:
+"Match type" = categorical variable, categorizes specificity of keyword.
+"Clicks" = number of clicks received in each advertisement.
+"Click Charges" = cost that the publisher pays when the website link is clicked.
+ "Search Engine bid": the bid price to pay per advertisement click.
+"Impressions" = number of times the website link was seen on a search result.
+With these, we believe a multiple regression model can give us intuition about the statistical difference between the level of specificity of keywords, and the amount of revenue generated. 
+
+### Results
+After running the multiple linear regression model, we obtained an F-statistic value of 3501 with a p-value of 2.2e-16%. This p-value is significantly less than the confidence level predetermined before the analysis of 5%. This explains that one or more variables have coefficients that are, on an absolute level, larger than 0.  We can use this as part of the evidence for linear association and strength in the model.
+The Multiple R-squared and Adjusted R-squared obtained had approximately the same values:  84.6% (0.846), which is telling us that the model explains around 84.6% of the variation of the response variable. Additionally, given both R-square statistics are similar, we can also conclude that neither of the variables are redundant in the model. This high degree of coefficient of determination is high for usual cases in marketing and advertising analytics, where the average R-square of a model can hover around 30%. 
+
+### Interpretation
+Because we used match type, a categorical variable, as an explanatory variable, we can interpret the coefficients of the model in the following way:
+The baseline category in the multiple regression model for the keyword specificity is the “Advanced” specificity. Knowing this, we can then know that the linear model for the “Advanced” category is made up of:
+y_^ = -0.0228 + 0.2037(Clicks) - 6.927(Click Charges) + 0.5139(Search Engine Bid) -0.01819(Impressions).
+The negative intercept is an extrapolation from the data. For advanced keywords, assuming all variables stay fixed, the average revenue rises by $0.2 per click; the average revenue decreases by $7 per click charge or total cost of ad when it is clicked; the average revenue increases by $0.5 per search engine bid dollar; and at last, the average revenue  decreases by $0.01 per impression made in the ad. 
+The coefficients associated with the other categories like “Broad”, “Exact”, and “Standard”, reflect differences of keyword specificity from the “Advanced”  specificity. 
+With these categories, “Broad” keywords add an additional $0.0157  to the intercept of the “advanced” fit, making it a better option as it increases the overall average estimate of revenue made; For the “Exact” keywords, the total revenue increases by $0.0048 more than that of the “Advanced” fit, which makes this category slightly better than the baseline; at last, “standard” keywords decrease the total revenue by $0.059 on average, which results in the worst category to have.
+The coefficients of the exact and standard categories are all statistically significant, by having a p-value of less than the significance level of 5% predetermined before the analysis. However, the coefficient for the Broad category is not, which does not give us evidence to show that the broad category is better on average on estimating higher revenue, even though its coefficient was the highest one. 
+
+### Recommendations
+With our observed model, we recommend advertisements with “Exact” keywords, as they increase the average total revenue per flight booked compared to the other keyword match types. However, we also recommend to stay away from “Standard” keywords, given the average total revenue per flight booked gets a substantial decrease compared to the other specificity categories.  With this being said, it is best for Air France’s advertisements to use keywords that are either advanced or exact, as these are statistically associated with higher estimated revenue, whereas a standard or “in-between” keyword decreases the estimated revenue.
+This model did not find sufficient statistical evidence to prove that the “Broad” category was significantly better than the “advanced” category.
+
+## Problem Statement 2: Which search engines are worth investing in, comparing lead engines like Google, Overture, MSN, Yahoo, and the aggregator Kayak.
+
+```{r Problem Statement 2}
+
+############### Comparing TCR and ROA ######################
+# Create User defined function for Transaction Conversion Rate
+TCR <- function(x){
+  round((sum(x$`Total Volume of Bookings`)/sum(x$Clicks))*100, 2)
+} # closing TCR function
+
+# MediaContact TCR
+TCR_MediaContact <- c(TCR(Google_Global),TCR(Overture_Global), TCR(MSN_Global),TCR(Google_US),TCR(Overture_US),TCR(MSN_US),TCR(Yahoo_US))
+# Compare MediaContact TCR to Kayak TCR
+TCR_Kayak <- round(0.073265234*100, 2)
+TCR_Comparison <- ifelse(TCR_MediaContact > TCR_Kayak, "MediaContact_Better", "Kayak_Better")
+# Create dataframe
+Platform <-c("Google_Global", "Overture_Global", "MSN_Global", "Google_US","Overture_US","MSN_US","Yahoo_US")
+Summary_TCR_Comparison <- cbind(Platform,TCR_MediaContact,TCR_Comparison)
+Summary_TCR_Comparison <- as.data.frame(Summary_TCR_Comparison )
+print(Summary_TCR_Comparison)
+
+# Create User defined function for ROA
+ROA <- function(x){
+  round(sum(x$Amount) / sum(x$`Total Cost`), 2)
+}# closing ROA function
+
+# MediaContact ROA 
+ROA_MediaContact <- c(ROA(Google_Global),ROA(Overture_Global), ROA(MSN_Global),ROA(Google_US),ROA(Overture_US),ROA(MSN_US),ROA(Yahoo_US))
+# Compare MediaContact TCR to Kayak TCR
+ROA_Kayak <- round(64.513172, 2)
+ROA_Comparison <- ifelse(ROA_MediaContact > ROA_Kayak, "MediaContact_Better", "Kayak_Better")
+# Create dataframe
+Summary_ROA_Comparison <- cbind(Platform,ROA_MediaContact,ROA_Comparison)
+Summary_ROA_Comparison <- as.data.frame(Summary_ROA_Comparison)
+print(Summary_ROA_Comparison)
+
+# Preparing data for bar chart
+TCR_MediaContact_US <- c(TCR(Google_US),TCR(Overture_US),TCR(MSN_US),TCR(Yahoo_US), TCR_Kayak)
+TCR_MediaContact_Global <- c(TCR(Google_Global),TCR(Overture_Global), TCR(MSN_Global),TCR_Kayak)
+ROA_MediaContact_US <- c(ROA(Google_US),ROA(Overture_US),ROA(MSN_US),ROA(Yahoo_US), ROA_Kayak)
+ROA_MediaContact_Global <- c(ROA(Google_Global),ROA(Overture_Global),ROA(MSN_Global),ROA_Kayak)
+
+# Preparing elements for bar chart
+US_Platform <-c("Google","Overture","MSN","Yahoo", "Kayak")
+G_Platform <-c("Google", "Overture", "MSN", "Kayak")
+my_colors <- c("#F14A17", "#56B4E9", "#009E73", 
+               "#5425D8", "#E69F00")
+my_colors_G <- c("#F14A17", "#56B4E9", "#009E73", 
+                 "#E69F00")
+
+# Plot the bar chart TCR US
+barplot(TCR_MediaContact_US, 
+        names.arg= US_Platform,
+        xlab="Search engines",
+        ylab="Transaction Coversion Rate(%)",
+        col= my_colors,
+        main="Transaction Coversion Rate - US")
+
+# Plot the bar chart TCR Global 
+barplot(TCR_MediaContact_Global, 
+        names.arg= G_Platform,
+        xlab="Search engines",
+        ylab="Transaction Coversion Rate(%)",
+        col= my_colors_G,
+        main="Transaction Coversion Rate - Global")
+
+# Plot the bar chart ROA US
+barplot(ROA_MediaContact_US, 
+        names.arg= US_Platform,
+        xlab="Search engines",
+        ylab="Return On Ad Spend($)",
+        col= my_colors,
+        main="Return On Ad Spend - US")
+
+# Plot the bar chart ROA Global 
+barplot(ROA_MediaContact_Global, 
+        names.arg= G_Platform,
+        xlab="Search engines",
+        ylab="Return On Ad Spend($)",
+        col= my_colors_G,
+        main="Return On Ad Spend - Global") 
+
+```
+
+## Analysis
+### TCR , ROA Comparison Introduction  
+Since a high Conversion rate and Return on ad spend are indicative of successful marketing and advertising effort , we calculate them to consider which search engines worth investing in.
+
+### TCR Interpretation 
+From the total number of customers who visit the Air France website through the Google global platform 1.09% of them made a transaction, for Overture global platform 0.61% of them made a transaction, for MSN global 1.15% of them made a transaction.
+
+From the total number of customers who visit the Air France website through the Google US platform 0.81% of them made a transaction, for the Overture global platform 0.24% of them made a transaction, for MSN global 1.3% of them made a transaction, for Yahoo US 1.45% of them made a transaction.
+
+However, the aggregator platform, Kayak has the highest TCR and 7.33% of the visitors made a transaction.
+
+### ROA Interpretation 
+For every dollar DoubleClick spends on Global ad campaigns, Google global generates about $7.69  worth of revenue, Overture global generates about $6.69  worth of revenue, MSN global generates about $11.97  worth of revenue.
+
+For every dollar DoubleClick spends on US ad campaigns, Google US generates about $9.94  worth of revenue, Overture US generates about $2.45  worth of revenue, MSN US generates about $11.28 worth of revenue, Yahoo US generates about $11.28 worth of revenue.
+
+However, the aggregator platform, Kayak has the highest ROA and generates about $ 64.51worth of revenue.
+
+### Recommendations 
+For the global market, MSN and Google generate almost the same amount of TCR however, MSN was able to provide more return on ad spend. Therefore we recommend DoubleClick to focus on MSN ad campaigns since it costs cheaper and generates more profit as well as optimizing Google ad campaigns to reduce cost.
+
+For the US market, Yahoo provided the best return and ad spend and it is certainly being the most popular platform in the US followed by MSN and Google. We recommend DoubleClick to focus on investing in ad campaigns with Yahoo and optimizing MSN and Google ad campaigns to reduce cost.
+
+In addition we want to recommend DoubleClick considering investing in the aggregator ad campaign with Kayak since it generates a high TCR and Return on ad spend.
+
+## Problem Statement 3: How to optimize SEM in the United States.
+```{r Problem Statement 3}
+
+############################## US CAMPAIGNS ####################################################
+
+geo_targeted_campaigns <- AF_US[grepl("^Geo", AF_US$Campaign),] #geo targeted campaigns in the US
+geo_targeted_campaigns$"Campaign Type" <- c("Geo Targeted Campaign")
+
+branded_campaigns <- AF_US[grepl("^Air France", AF_US$Campaign),] #branded campaigns in the US
+branded_campaigns$"Campaign Type" <- c("Branded Campaign")
+
+other_campaigns <- AF_US[!grepl("^Geo", AF_US$Campaign),]
+other_campaigns <- other_campaigns[!grepl("^Air France", other_campaigns$Campaign),] #other campaigns in the US
+other_campaigns$"Campaign Type" <- c("Other Campaign")
+
+US_campaigns <- rbind(geo_targeted_campaigns, branded_campaigns, other_campaigns)
+
+US_campaigns$`Campaign Type` <- as.factor(US_campaigns$`Campaign Type`)
+US_campaigns$`Bid Strategy`[US_campaigns$`Bid Strategy`== "Postiion 1-4 Bid Strategy"] <- "Position 1-4 Bid Strategy"
+US_campaigns$`Bid Strategy`[US_campaigns$`Bid Strategy`== "Position 1 -2 Target"] <- "Position 1-2 Target"
+US_campaigns$`Bid Strategy` <- as.factor(US_campaigns$`Bid Strategy`)
+
+#Summary of US campaigns
+US_campaigns_overview <- as.data.frame(matrix(nrow=3, ncol=14))
+US_campaigns_type <- levels(factor(US_campaigns$'Campaign Type'))
+rownames(US_campaigns_overview) <- US_campaigns_type
+colnames(US_campaigns_overview) <- colnames(AF_US[12:25])
+
+for(i in 1:nrow(US_campaigns_overview)){
+  x <- rownames(US_campaigns_overview)[i]
+  subset <- subset(US_campaigns, US_campaigns$`Campaign Type` == x)
+  US_campaigns_overview[i,] <- sapply(subset[,12:25],mean)
+}
+
+######## REGRESSION
+# Linear Regression for each type of campaign 
+#Geo Targeted
+geo_regression <- lm(Amount ~ `Impressions`+`Search Engine Bid`+`Clicks`+`Total Cost`+`Total Volume of Bookings`, data = geo_targeted_campaigns)
+summary(geo_regression)
+
+#Branded
+branded_regression <- lm(Amount ~ `Impressions`+`Search Engine Bid`+`Clicks`+`Total Cost`+`Total Volume of Bookings`, data = branded_campaigns)
+summary(branded_regression)
+
+#Other
+other_regression <- lm(Amount ~ `Impressions`+`Search Engine Bid`+`Clicks`+`Total Cost`+`Total Volume of Bookings`, data = other_campaigns)
+summary(other_regression)
+
+# Logistics Regression for whether there is a Booking or not
+US_campaigns$`Booking` <- as.numeric(US_campaigns$`Total Volume of Bookings` >= 1)
+
+US_campaign_regression <- glm(Booking ~ `Campaign Type`+`Search Engine Bid`+`Total Cost`, data = US_campaigns)
+
+summary(US_campaign_regression)
+
+exp(2.388e-01)-1 # Intercept
+exp(-2.410e-01)-1 # `Campaign Type`Geo Targeted Campaign
+exp(-2.131e-01)-1 # `Campaign Type`Other Campaign
+exp(5.836e-03) # Search Engine Bid
+exp(4.601e-05) # Total Cost
+
+
+```
+## Analysis
+### Linear Regression 
+SEM campaign is a marketing strategy that generates ads in search engines to position the brand in the top positions of search results. By maximizing brand awareness on search result pages, it is expected to have higher traffic on the company's website. In this case, AirFrance's SEM campaigns aim to increase conversion from visits to AirFrance website to ticket purchases. 
+In order to measure the magnitude of the factors that affect AirFrance's revenue from flights purchased, we've conducted linear regression to each campaign type.
+
+#### Geo-Targeted Campaigns
+Our model represents ~75% of the variance in the dependent variable that the independent variables explain collectively with a P-value of less than 2.2e-16. With our model, we came up with the following regression equation:
+
+Y = 13.33 + 0.11*(Impressions) - 1.58*(Search Engine Bid) - 0.25*(Clicks) - 1.38*(Total Cost) + 891.06*(Total Volume of Bookings)
+
+In order to see the average revenue that we can get from a geo-targeted campaign, we used the average value for each coefficient retrieved from US Campaigns Overview table. According to our calculations, an average search within Geo-Targeted Campaign brings $50.23 as revenue. 
+
+#### Branded Campaigns
+Our model represents ~99% of the variance in the dependent variable that the independent variables explain collectively with a P-value of less than 2.2e-16. With our model, we came up with the following regression equation:
+
+Y = 548.74 + 0.19*(Impressions) - 354.31*(Search Engine Bid) - 7.76*(Clicks) + 1.77*(Total Cost) + 1595.2*(Total Volume of Bookings)
+
+In order to see the average revenue that we can get from a geo-targeted campaign, we used the average value for each coefficient retrieved from US Campaigns Overview table. According to our calculations, an average search within Geo-Targeted Campaign brings $15,123.58 as revenue. 
+
+#### Other Campaigns
+Our model represents ~97% of the variance in the dependent variable that the independent variables explain collectively with a P-value of less than 2.2e-16. With our model, we came up with the following regression equation:
+
+Y = - 28.59 + 0.0023*(Impressions) - 1.08*(Search Engine Bid) + 0.48*(Clicks) - 0.07*(Total Cost) + 1039*(Total Volume of Bookings)
+
+In order to see the average revenue that we can get from a geo-targeted campaign, we used the average value for each coefficient retrieved from US Campaigns Overview table. According to our calculations, an average search within Geo-Targeted Campaign brings $298.57 as revenue. 
+
+To sum up, AirFrance should enlarge its Branded Campaigns across the USA, since it brings the most revenue compared to others. Geo-targeted campaigns bring the least revenue where it should bring the most, since they should be area specific. AirFrance should elaborate its geo-targeted campaigns whereas continuing its other campaigns. 
+
+### Logistic Regression
+In order to explain the relationship between booking a ticket or not, and "Campaign Type", "Search Engine Bid" and "Total Cost", we have conducted a logistic regression. We chose these independent variables because we wanted to how they increase or decrease the odds of booking a ticket. When we run the regression analysis, we've seen that our P-value is less than 2.2e-16, thus we can say that our model is statistically significant. In addition to that, each independent variable is important in our model. After running an exp("estimate")-1 formula for each variable, we came up with a solution that:
+
+- If the campaign type is "Branded", it increases the odds of booking a ticket by 27%.
+- If the campaign type is "Geo Targeted", it decreases the odds of booking a ticket by 21%.
+- If the campaign type is "Other", it decreases the odds of booking a ticket by 19%.
+- One unit increase in Search Engine Bid increases the odds of booking a ticket by 100%.
+- One unit increase in Total Cost increases the odds of booking a ticket by 100%.
+
+According to our analysis, Branded Campaigns tend to perform better than both Geo-Targeted Campaigns and Other Campaigns. As a matter of fact, geo-targeted campaigns and other campaigns decrease the odds of booking a ticket with the current strategy. Thus, if AirFrance wants to continue its Geo-Targeted Campaigns, they should do the following steps:
+
+- Exclude locations where there is no potential customers
+- Include location-specific terms in ads
+- Make ads local
+- Enable extensions in ads like directing to booking page
+
+
+```{r Recommendations}
+
+```
+
+
+
+
+
